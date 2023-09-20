@@ -1,0 +1,15 @@
+[package]
+name = "trustfall-serde-yaml"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1.0.75"
+indoc = "2.0.3"
+kdl = "4.6.0"
+serde = { version = "1.0.188", features = ["derive"] }
+serde_yaml = "0.9.25"
+trustfall = "0.6.1"
+trustfall_core = "0.6.0"
