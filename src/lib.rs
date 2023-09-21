@@ -4,12 +4,16 @@ use std::num::NonZeroUsize;
 use std::str::FromStr;
 use std::sync::Arc;
 
+use async_graphql_parser::types::Type;
 use kdl::KdlDocument;
 use trustfall::provider::{
     BasicAdapter, ContextIterator, ContextOutcomeIterator, EdgeParameters, VertexIterator,
 };
 use trustfall::FieldValue;
-use trustfall_core::ir::{Eid, IREdge, IRQuery, IRQueryComponent, IRVertex, IndexedQuery, Vid};
+use trustfall_core::ir::{
+    ContextField, Eid, IREdge, IRQuery, IRQueryComponent, IRVertex, IndexedQuery,
+    Output as TFOutput, Vid,
+};
 
 #[derive(Debug, Clone)]
 struct Vertex(Arc<serde_yaml::Value>);
@@ -51,11 +55,20 @@ impl<'vertex> BasicAdapter<'vertex> for YamlAdapter {
 
     fn resolve_property(
         &self,
-        _contexts: ContextIterator<'vertex, Self::Vertex>,
-        _type_name: &str,
-        _property_name: &str,
+        contexts: ContextIterator<'vertex, Self::Vertex>,
+        type_name: &str,
+        property_name: &str,
     ) -> ContextOutcomeIterator<'vertex, Self::Vertex, FieldValue> {
-        todo!()
+        let type_name = type_name.to_string();
+        let property_name = property_name.to_string();
+        Box::new(contexts.filter_map(move |ctx| {
+            let node = ctx.active_vertex().clone().unwrap();
+
+            println!("Looking for {property_name} of type {type_name} on:");
+            dbg!(&node);
+
+            Some((ctx, FieldValue::from("hi there")))
+        }))
     }
 
     fn resolve_neighbors(
@@ -105,15 +118,18 @@ struct Query(KdlDocument);
 
 type Vertices = BTreeMap<Vid, IRVertex>;
 type Edges = BTreeMap<Eid, Arc<IREdge>>;
+type Outputs = BTreeMap<Arc<str>, TFOutput>;
 
 fn construct_edges(
     doc: &KdlDocument,
     parent_vid: Vid,
     vid_maker: &mut impl Iterator<Item = Vid>,
     eid_maker: &mut impl Iterator<Item = Eid>,
-) -> (Vertices, Edges) {
+) -> (Vertices, Edges, Outputs) {
     let mut vertices = Vertices::new();
     let mut edges = Edges::new();
+    let mut outputs = Outputs::new();
+
     for node in doc.nodes() {
         let next_vid = vid_maker.next().unwrap();
         let name = node.name().value();
@@ -128,6 +144,20 @@ fn construct_edges(
                 filters: Vec::new(),
             },
         );
+
+        if let Some(entry) = node.entries().first() {
+            let v = entry.value().to_string();
+            println!("{v}");
+
+            outputs.insert(
+                Arc::from(v.as_str()),
+                TFOutput {
+                    name: Arc::from(v.as_str()),
+                    value_type: Type::new("String").unwrap(),
+                    vid: next_vid,
+                },
+            );
+        }
 
         let parent_to_needle = eid_maker.next().unwrap();
         edges.insert(
@@ -144,12 +174,13 @@ fn construct_edges(
         );
 
         if let Some(d) = node.children() {
-            let (v, e) = construct_edges(d, next_vid, vid_maker, eid_maker);
+            let (v, e, o) = construct_edges(d, next_vid, vid_maker, eid_maker);
             vertices.extend(v);
             edges.extend(e);
+            outputs.extend(o);
         }
     }
-    (vertices, edges)
+    (vertices, edges, outputs)
 }
 
 impl Query {
@@ -177,7 +208,7 @@ impl Query {
 
         // let starting_point = self.0.get("doc").expect("Every query must start with doc");
 
-        let (v, e) = construct_edges(&self.0, starting_vid, &mut vid_maker, &mut eid_maker);
+        let (v, e, o) = construct_edges(&self.0, starting_vid, &mut vid_maker, &mut eid_maker);
         vertices.extend(v);
         edges.extend(e);
 
@@ -186,7 +217,19 @@ impl Query {
             vertices,
             edges,
             folds: Default::default(),
-            outputs: BTreeMap::new(),
+            outputs: o
+                .iter()
+                .map(|(key, output)| {
+                    (
+                        key.clone(),
+                        ContextField {
+                            vertex_id: output.vid,
+                            field_name: output.name.clone(), // Maaaaaaaaybe... might be wrong if `output != field`
+                            field_type: output.value_type.clone(), // Same as above...
+                        },
+                    )
+                })
+                .collect(),
         };
 
         let ir_query = IRQuery {
@@ -196,7 +239,8 @@ impl Query {
             variables: BTreeMap::new(),
         };
 
-        let query: IndexedQuery = ir_query.try_into().unwrap();
+        let mut query: IndexedQuery = ir_query.try_into().unwrap();
+        query.outputs = o;
         let arguments = BTreeMap::new();
 
         (query, arguments)
