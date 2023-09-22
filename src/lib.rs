@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::iter::successors;
 use std::num::NonZeroUsize;
+use std::println;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -64,10 +65,11 @@ impl<'vertex> BasicAdapter<'vertex> for YamlAdapter {
         Box::new(contexts.filter_map(move |ctx| {
             let node = ctx.active_vertex().clone().unwrap();
 
-            println!("Looking for {property_name} of type {type_name} on:");
-            dbg!(&node);
-
-            Some((ctx, FieldValue::from("hi there")))
+            println!("Looking for {property_name} of type {type_name} on {node:?}:");
+            node.0
+                .get(&property_name)
+                .and_then(|v| v.as_str())
+                .map(|v| (ctx.clone(), FieldValue::from(v)))
         }))
     }
 
@@ -147,19 +149,26 @@ fn construct_edges(
 
         if let Some(entry) = node.entries().first() {
             let v = entry.value().to_string();
-            println!("{v}");
 
-            outputs.insert(
-                Arc::from(v.as_str()),
-                TFOutput {
-                    name: Arc::from(v.as_str()),
-                    value_type: Type::new("String").unwrap(),
-                    vid: next_vid,
-                },
-            );
+            let output_name = v
+                .strip_prefix("\"@")
+                .and_then(|v| v.strip_suffix("\""))
+                .unwrap_or(&v);
+
+            if v.starts_with(r#""@"#) {
+                outputs.insert(
+                    Arc::from(output_name),
+                    TFOutput {
+                        name: Arc::from(name),
+                        value_type: Type::new("String").unwrap(),
+                        vid: parent_vid,
+                    },
+                );
+            }
         }
 
         let parent_to_needle = eid_maker.next().unwrap();
+
         edges.insert(
             parent_to_needle,
             Arc::new(IREdge {
@@ -223,9 +232,9 @@ impl Query {
                     (
                         key.clone(),
                         ContextField {
-                            vertex_id: output.vid,
-                            field_name: output.name.clone(), // Maaaaaaaaybe... might be wrong if `output != field`
-                            field_type: output.value_type.clone(), // Same as above...
+                            vertex_id: output.vid,                 // on this Vertex...
+                            field_name: output.name.clone(),       // ...look for this field...
+                            field_type: output.value_type.clone(), // ...with this type...
                         },
                     )
                 })
@@ -247,7 +256,9 @@ impl Query {
     }
 }
 
-pub fn run(raw_query: &str, yaml: &str) -> Result<(), anyhow::Error> {
+type Outcomes = Vec<BTreeMap<String, FieldValue>>;
+
+pub fn run(raw_query: &str, yaml: &str) -> Result<Outcomes, anyhow::Error> {
     let kdl_doc = kdl::KdlDocument::from_str(raw_query).unwrap();
     let root = serde_yaml::from_str(yaml).unwrap();
 
@@ -257,16 +268,19 @@ pub fn run(raw_query: &str, yaml: &str) -> Result<(), anyhow::Error> {
         root: Arc::new(root),
     };
 
-    let r: Vec<_> = trustfall_core::interpreter::execution::interpret_ir(
+    let result: Vec<_> = trustfall_core::interpreter::execution::interpret_ir(
         Arc::new(adapter),
         Arc::new(query),
         Arc::new(variables),
     )?
+    .map(|vals| {
+        vals.into_iter()
+            .map(|(key, field)| (key.to_string(), field))
+            .collect::<BTreeMap<_, _>>()
+    })
     .collect();
 
-    dbg!(&r);
-
-    Ok(())
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -282,6 +296,11 @@ mod tests {
             }
             spec {
                 template {
+                    metadata {
+                        annotations {
+                            "kube2iam/role" "@role"
+                        }
+                    }
                     spec {
                         containers {
                             * {
@@ -298,6 +317,7 @@ mod tests {
             kind: Deployment
             metadata:
               name: other-server
+              foo: bar
             spec:
               template:
                 metadata:
