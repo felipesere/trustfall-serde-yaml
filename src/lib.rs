@@ -285,6 +285,11 @@ pub fn run(raw_query: &str, yaml: &str) -> Result<Outcomes, anyhow::Error> {
 
 #[cfg(test)]
 mod tests {
+    use std::assert_eq;
+    use std::collections::BTreeMap;
+
+    use trustfall::FieldValue;
+
     use crate::run;
 
     #[test]
@@ -332,10 +337,46 @@ mod tests {
                     name: proxy-envoy
         "# };
 
-        let err = run(pretend_query, yaml);
-        dbg!(&err);
+        let hits = run(pretend_query, yaml).unwrap();
 
-        assert!(false);
+        assert_eq!(
+            hits,
+            vec![
+                BTreeMap::from([
+                    ("name".into(), FieldValue::from("other-server")),
+                    (
+                        "role".into(),
+                        FieldValue::from("some-fancy-ARN-that-does-not-matter")
+                    ),
+                    (
+                        "image".into(),
+                        FieldValue::from("truelayer-docker.jfrog.io/clients-api:v1.44.19")
+                    ),
+                ]),
+                BTreeMap::from([
+                    ("name".into(), FieldValue::from("other-server")),
+                    (
+                        "role".into(),
+                        FieldValue::from("some-fancy-ARN-that-does-not-matter")
+                    ),
+                    (
+                        "image".into(),
+                        FieldValue::from("truelayer-docker.jfrog.io/nginx-sidecar:v1.1.11")
+                    ),
+                ]),
+                BTreeMap::from([
+                    ("name".into(), FieldValue::from("other-server")),
+                    (
+                        "role".into(),
+                        FieldValue::from("some-fancy-ARN-that-does-not-matter")
+                    ),
+                    (
+                        "image".into(),
+                        FieldValue::from("truelayer-docker.jfrog.io/envoyproxy_envoy:v1.17.0")
+                    ),
+                ]),
+            ]
+        )
     }
 }
 
